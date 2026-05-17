@@ -279,6 +279,28 @@ def main():
     p.add_argument("--de-quantize", action="store_true",
                    help="De-quantize weights during fusion")
 
+    p = sub.add_parser("prepare-data", add_help=False)
+    p.add_argument("docs_dir", type=str, help="Directory containing markdown docs")
+    p.add_argument("-o", "--output", type=str, default="data/qa_train.jsonl",
+                   help="Output JSONL path (default: data/qa_train.jsonl)")
+    p.add_argument("--eval-output", type=str, default=None,
+                   help="Eval split output path (default: <output>_eval.jsonl)")
+    p.add_argument("--model", type=str, default=None,
+                   help="Model for QA generation (default: gemma-4-e4b-it-4bit)")
+    p.add_argument("--max-chunk-chars", type=int, default=2500)
+    p.add_argument("--max-tokens", type=int, default=2048)
+    p.add_argument("--eval-ratio", type=float, default=0.15)
+    p.add_argument("--split-by", type=str, default="document", choices=["document", "random"])
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--dry-run", action="store_true", help="Show chunk stats without generating QA")
+
+    p = sub.add_parser("eval-qa", add_help=False)
+    p.add_argument("eval_jsonl", type=str, help="Path to eval JSONL file")
+    p.add_argument("--model", type=str, default=None, help="Fine-tuned model to evaluate")
+    p.add_argument("--judge-model", type=str, default=None, help="Judge model (default: same)")
+    p.add_argument("--max-tokens", type=int, default=1024)
+    p.add_argument("--max-samples", type=int, default=None)
+
     p = sub.add_parser("playground", add_help=False)
     p.add_argument("--model", type=str, default=None,
                    help="Model profile alias or HF repo (default: gemma-4-e4b-it-4bit). "
@@ -410,6 +432,24 @@ def main():
     elif args.command == "export-gemma":
         from .finetune.export import main as export_main
         export_main(args)
+    elif args.command == "prepare-data":
+        from .prepare.pipeline import run_prepare, PrepareConfig
+        cfg = PrepareConfig(
+            docs_dir=args.docs_dir,
+            output_path=args.output,
+            eval_output_path=args.eval_output,
+            model_id=args.model,
+            max_chunk_chars=args.max_chunk_chars,
+            max_tokens=args.max_tokens,
+            eval_ratio=args.eval_ratio,
+            split_by=args.split_by,
+            seed=args.seed,
+            dry_run=args.dry_run,
+        )
+        run_prepare(cfg)
+    elif args.command == "eval-qa":
+        from .prepare.eval_qa import main as eval_qa_main
+        eval_qa_main(args)
     elif args.command == "playground":
         if getattr(args, "model", None) == "help":
             from .model.registry import list_profiles

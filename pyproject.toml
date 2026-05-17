@@ -11,6 +11,7 @@ dependencies = [
 
 [project.optional-dependencies]
 mlx = ["mlx-vlm>=0.5"]
+prepare = ["mlx-vlm>=0.5", "tqdm"]
 gemma-ft = ["mlx-lm>=0.25", "pyyaml"]
 train = [
     "jax",
