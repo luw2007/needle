@@ -68,6 +68,8 @@ def generate_qa_from_chunk(
             output = mlx_generate(
                 model, processor, prompt, max_tokens=max_tokens, verbose=False
             )
+            if hasattr(output, 'text'):
+                output = output.text
         except ImportError:
             raise ImportError(
                 "mlx-vlm is required for QA generation.\n"

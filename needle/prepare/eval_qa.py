@@ -126,7 +126,8 @@ def _generate_answer(model, processor, question: str, max_tokens: int) -> str:
     prompt = processor.tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
-    return mlx_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False)
+    result = mlx_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False)
+    return result.text if hasattr(result, 'text') else str(result)
 
 
 def _judge_answer(model, processor, question: str, expected: str, predicted: str) -> str:
@@ -146,6 +147,7 @@ def _judge_answer(model, processor, question: str, expected: str, predicted: str
         messages, tokenize=False, add_generation_prompt=True
     )
     output = mlx_generate(model, processor, prompt, max_tokens=32, verbose=False)
+    output = output.text if hasattr(output, 'text') else str(output)
     output = output.strip().lower()
 
     for label in ("correct", "partial", "wrong"):
