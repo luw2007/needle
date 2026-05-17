@@ -60,8 +60,8 @@ def evaluate_qa(
 
     report = EvalReport(total=len(records))
 
-    for i, (question, expected) in enumerate(records):
-        predicted = _generate_answer(answer_model, answer_tokenizer, question, max_tokens)
+    for i, (question, expected, system_ctx) in enumerate(records):
+        predicted = _generate_answer(answer_model, answer_tokenizer, question, max_tokens, system_ctx)
         judgment, score = _keyword_judge(expected, predicted)
 
         if judgment == "correct":
@@ -85,12 +85,7 @@ def evaluate_qa(
 
 
 def _keyword_judge(expected: str, predicted: str) -> tuple[str, float]:
-    """Judge answer quality by combining ROUGE-L F1 and key entity overlap.
-
-    Uses character-level LCS for Chinese text, plus checks that
-    critical identifiers (code, paths, technical terms) from the
-    expected answer appear in the prediction.
-    """
+    """Judge answer quality by combining ROUGE-L F1, entity overlap, negation check, and list coverage."""
     expected_clean = _normalize_text(expected)
     predicted_clean = _normalize_text(predicted)
 
@@ -100,22 +95,57 @@ def _keyword_judge(expected: str, predicted: str) -> tuple[str, float]:
     lcs_len = _lcs_length(expected_clean, predicted_clean)
     precision = lcs_len / len(predicted_clean) if predicted_clean else 0.0
     recall = lcs_len / len(expected_clean) if expected_clean else 0.0
-
-    if precision + recall > 0:
-        f1 = 2 * precision * recall / (precision + recall)
-    else:
-        f1 = 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
 
     entity_score = _entity_overlap(expected, predicted)
 
-    combined = max(f1, entity_score)
+    if _negation_mismatch(expected, predicted):
+        entity_score *= 0.5
+        f1 *= 0.5
+
+    combined = 0.6 * f1 + 0.4 * entity_score
+
+    list_cov = _list_coverage(expected, predicted)
+    if list_cov is not None and list_cov < 0.5:
+        return ("partial" if combined >= 0.10 else "wrong"), combined * 0.5
 
     if combined >= 0.20:
         return "correct", combined
-    elif combined >= 0.10:
+    elif combined >= 0.08:
         return "partial", combined
     else:
         return "wrong", combined
+
+
+_NEGATION_MARKERS = {"不", "没", "无", "非", "否", "未", "别", "勿", "没有", "无法", "并非", "不是", "不能", "不会"}
+
+
+def _negation_mismatch(expected: str, predicted: str) -> bool:
+    """Detect if expected and predicted have different negation polarity."""
+    exp_neg = any(m in expected for m in _NEGATION_MARKERS)
+    pred_neg = any(m in predicted for m in _NEGATION_MARKERS)
+    return exp_neg != pred_neg
+
+
+def _list_coverage(expected: str, predicted: str) -> float | None:
+    """Check coverage of enumerated items in expected answer. Returns None if not a list."""
+    import re
+    items = re.split(r'[、，,;；]\s*', expected)
+    items = [it.strip() for it in items if len(it.strip()) >= 4]
+    if len(items) < 3:
+        backtick_items = re.findall(r'`([^`]+)`', expected)
+        bracket_items = re.findall(r'\[\[([^\]]+)\]\]', expected)
+        items = backtick_items + bracket_items
+    if len(items) < 3:
+        return None
+
+    predicted_lower = predicted.lower()
+    hits = 0
+    for item in items:
+        item_clean = item.strip('`[]').lower()
+        if len(item_clean) >= 2 and item_clean in predicted_lower:
+            hits += 1
+    return hits / len(items) if items else None
 
 
 def _entity_overlap(expected: str, predicted: str) -> float:
@@ -182,8 +212,9 @@ def _lcs_length_approx(a: str, b: str) -> int:
     return report
 
 
-def _load_eval_records(path: Path) -> list[tuple[str, str]]:
-    records: list[tuple[str, str]] = []
+def _load_eval_records(path: Path) -> list[tuple[str, str, str]]:
+    """Load eval records as (question, expected_answer, system_context) tuples."""
+    records: list[tuple[str, str, str]] = []
     with path.open(encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -193,13 +224,16 @@ def _load_eval_records(path: Path) -> list[tuple[str, str]]:
             messages = data.get("messages", [])
             question = ""
             answer = ""
+            system_ctx = ""
             for msg in messages:
-                if msg.get("role") == "user":
+                if msg.get("role") == "system":
+                    system_ctx = msg.get("content", "")
+                elif msg.get("role") == "user":
                     question = msg.get("content", "")
                 elif msg.get("role") == "assistant":
                     answer = msg.get("content", "")
             if question and answer:
-                records.append((question, answer))
+                records.append((question, answer, system_ctx))
     return records
 
 
@@ -223,11 +257,12 @@ def _load_eval_model(model_id: str | None, adapter_path: str | None):
     return model, tokenizer
 
 
-def _generate_answer(model, tokenizer, question: str, max_tokens: int) -> str:
+def _generate_answer(model, tokenizer, question: str, max_tokens: int, system_ctx: str = "") -> str:
     from mlx_lm import generate as mlx_gen
 
+    system_content = system_ctx if system_ctx else "你是一个技术助手。基于技术文档准确回答问题。"
     messages = [
-        {"role": "system", "content": "你是一个技术助手。基于技术文档准确回答问题。"},
+        {"role": "system", "content": system_content},
         {"role": "user", "content": question},
     ]
     prompt = tokenizer.apply_chat_template(

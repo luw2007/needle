@@ -72,9 +72,12 @@ def run_prepare(cfg: PrepareConfig) -> None:
 
 
 def qa_to_messages(qa: QAPair) -> dict:
+    system_content = SYSTEM_MSG
+    if qa.chunk_content:
+        system_content += f"\n\n参考文档：\n{qa.chunk_content}"
     return {
         "messages": [
-            {"role": "system", "content": SYSTEM_MSG},
+            {"role": "system", "content": system_content},
             {"role": "user", "content": qa.question},
             {"role": "assistant", "content": qa.answer},
         ]

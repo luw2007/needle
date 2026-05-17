@@ -17,13 +17,14 @@ QA_SYSTEM_PROMPT = """你是一个技术文档QA数据生成专家。根据给�
    - 推理型：需要理解上下文才能回答
    - 应用型：如何使用/配置某个功能
 3. 答案必须忠实于文档内容，不编造信息
-4. 答案应完整，包含关键细节
-5. 使用中文
+4. 答案必须简短精准，1-2句话，直接给出核心信息，不要展开解释
+5. 答案中必须包含关键术语、标识符、文件路径等具体信息
+6. 使用中文
 
 输出格式（严格JSON数组）：
 [
-  {"question": "问题1", "answer": "答案1", "type": "factual"},
-  {"question": "问题2", "answer": "答案2", "type": "reasoning"}
+  {"question": "问题1", "answer": "简短答案1", "type": "factual"},
+  {"question": "问题2", "answer": "简短答案2", "type": "reasoning"}
 ]
 
 仅输出JSON数组，不要其他文字。"""
@@ -37,6 +38,7 @@ class QAPair:
     source_doc: str
     source_heading: str
     chunk_index: int
+    chunk_content: str = ""
 
 
 def generate_qa_from_chunk(
@@ -117,6 +119,7 @@ def _parse_qa_output(text: str, chunk: Chunk) -> list[QAPair]:
                 source_doc=chunk.doc_path,
                 source_heading=chunk.heading_path,
                 chunk_index=chunk.chunk_index,
+                chunk_content=chunk.content,
             ))
 
     return pairs
