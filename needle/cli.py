@@ -296,7 +296,8 @@ def main():
 
     p = sub.add_parser("eval-qa", add_help=False)
     p.add_argument("eval_jsonl", type=str, help="Path to eval JSONL file")
-    p.add_argument("--model", type=str, default=None, help="Fine-tuned model to evaluate")
+    p.add_argument("--model", type=str, default=None, help="Base model to evaluate")
+    p.add_argument("--adapter-path", type=str, default=None, help="LoRA adapter path")
     p.add_argument("--judge-model", type=str, default=None, help="Judge model (default: same)")
     p.add_argument("--max-tokens", type=int, default=1024)
     p.add_argument("--max-samples", type=int, default=None)
