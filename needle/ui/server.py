@@ -423,16 +423,13 @@ def _run_generate(query, tools, seed, max_gen_len, constrained):
             result = generate_no_stream(
                 query,
                 tools=tools,
+                model_id=_current_model or None,
                 max_tokens=max_gen_len,
             )
             return result, None
         except Exception as exc:
             print(f"[generate] {exc}", file=sys.stderr)
             return None, "Generation failed"
-
-
-def _load_checkpoint(path, display_name=None):
-    pass
 
 
 def _validate_training_data(data_file_path):
@@ -696,37 +693,15 @@ def _start_finetune(tools_json, api_key):
     return True
 
 
-_HF_MODEL_REPO = "Cactus-Compute/needle"
-_HF_MODEL_FILE = "needle.pkl"
-
-
-def _resolve_checkpoint(checkpoint_arg):
-    """Resolve checkpoint path: always download from HuggingFace to ensure freshness."""
-    from huggingface_hub import hf_hub_download
-    local_dir = "checkpoints"
-    os.makedirs(local_dir, exist_ok=True)
-    filename = os.path.basename(checkpoint_arg) if checkpoint_arg else _HF_MODEL_FILE
-    repo = _HF_MODEL_REPO
-    print(f"Downloading {filename} from {repo}...", file=sys.stderr)
-    path = hf_hub_download(
-        repo_id=repo,
-        filename=filename,
-        repo_type="model",
-        local_dir=local_dir,
-        force_download=True,
-    )
-    print(f"Downloaded to {path}", file=sys.stderr)
-    return path
-
-
 def main(args):
     global _model_ready, _current_model
     from ..model.gemma import load_model
+    from ..model.registry import resolve_model
 
     model_id = getattr(args, "model", None)
     load_model(model_id)
     _model_ready = True
-    _current_model = model_id or "gemma-4-e4b-it-4bit"
+    _current_model = resolve_model(model_id)
 
     server = ThreadingHTTPServer((args.host, args.port), _Handler)
     server.timeout = _SOCKET_TIMEOUT

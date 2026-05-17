@@ -4,8 +4,11 @@ import re
 import sys
 import threading
 
+from .dataset.tokenizer import DEFAULT_MAX_ENC_LEN, DEFAULT_MAX_DEC_LEN, DEFAULT_MAX_GEN_LEN
+
 HELP = """Check the readme"""
 
+_JAX_COMMANDS = frozenset({"train", "pretrain", "eval", "finetune"})
 
 _ABSL_LOG_START = re.compile(rb"^[EIWF]\d{4} \d\d:\d\d:\d\d")
 _NOISY_LOG_HEADER = re.compile(
@@ -94,11 +97,11 @@ def _install_xla_log_filter():
     t.start()
 
 
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
-os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
-_install_xla_log_filter()
-
-from .dataset.tokenizer import DEFAULT_MAX_ENC_LEN, DEFAULT_MAX_DEC_LEN, DEFAULT_MAX_GEN_LEN
+def _setup_jax_env():
+    """Set XLA/gRPC env vars and install log filter — only for JAX commands."""
+    os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+    os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+    _install_xla_log_filter()
 
 
 def main():
@@ -191,7 +194,11 @@ def main():
                    help="Max token length for individual tool descriptions (default: 256)")
 
     p = sub.add_parser("run", add_help=False)
-    p.add_argument("--model", type=str, default=None, help="MLX model ID (default: gemma-4-e4b-it-4bit)")
+    p.add_argument("--model", type=str, default=None,
+                   help="Model profile alias or HF repo (default: gemma-4-e4b-it-4bit). "
+                        "Use --model help to list available profiles.")
+    p.add_argument("--checkpoint", type=str, default=None,
+                   help=argparse.SUPPRESS)
     p.add_argument("--query", type=str, default=None, help="Query text for tool-call generation")
     p.add_argument("--tools", type=str, default=None, help="Tools JSON for tool-call generation")
     p.add_argument("--max-len", type=int, default=512)
@@ -236,7 +243,9 @@ def main():
     p.add_argument("--max-dec-len", type=int, default=None)
 
     p = sub.add_parser("playground", add_help=False)
-    p.add_argument("--model", type=str, default=None, help="MLX model ID (default: gemma-4-e4b-it-4bit)")
+    p.add_argument("--model", type=str, default=None,
+                   help="Model profile alias or HF repo (default: gemma-4-e4b-it-4bit). "
+                        "Use --model help to list available profiles.")
     p.add_argument("--port", type=int, default=7860)
     p.add_argument("--host", type=str, default="127.0.0.1")
 
@@ -299,6 +308,9 @@ def main():
         print(HELP)
         sys.exit(0)
 
+    if args.command in _JAX_COMMANDS:
+        _setup_jax_env()
+
     if args.command == "tokenize":
         from .dataset.tokenize import tokenize
         tokenize(args)
@@ -315,6 +327,17 @@ def main():
         from .training.train import train
         train(args)
     elif args.command == "run":
+        if getattr(args, "checkpoint", None):
+            print("Error: --checkpoint is no longer supported for 'needle run'.\n"
+                  "Inference now uses mlx-vlm models via --model (default: gemma-4-e4b-it-4bit).\n"
+                  "Use 'needle run --model help' to list available profiles.\n"
+                  "For JAX checkpoint evaluation, use 'needle eval --checkpoint <path>'.",
+                  file=sys.stderr)
+            sys.exit(1)
+        if getattr(args, "model", None) == "help":
+            from .model.registry import list_profiles
+            print(list_profiles())
+            sys.exit(0)
         from .model.run import main as run_main
         run_main(args)
     elif args.command == "eval":
@@ -331,6 +354,10 @@ def main():
         from .training.finetune import finetune_local
         finetune_local(args)
     elif args.command == "playground":
+        if getattr(args, "model", None) == "help":
+            from .model.registry import list_profiles
+            print(list_profiles())
+            sys.exit(0)
         from .ui.server import main as ui_main
         ui_main(args)
     elif args.command == "tpu":

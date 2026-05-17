@@ -1,20 +1,27 @@
 import argparse
 import json as _json
 import pickle
-import re as _re
 import sys
 
-import jax
-import jax.numpy as jnp
 import numpy as np
 
-from ..dataset.dataset import get_tokenizer, to_snake_case, DEFAULT_MAX_ENC_LEN, DEFAULT_MAX_GEN_LEN
-from .architecture import (
-    SimpleAttentionNetwork,
-    TransformerConfig,
-    make_causal_mask,
-    make_padding_mask,
-)
+from ..dataset.dataset import to_snake_case, DEFAULT_MAX_ENC_LEN, DEFAULT_MAX_GEN_LEN
+
+
+def _jax():
+    import jax
+    import jax.numpy as jnp
+    return jax, jnp
+
+
+def _arch():
+    from .architecture import (
+        SimpleAttentionNetwork,
+        TransformerConfig,
+        make_causal_mask,
+        make_padding_mask,
+    )
+    return SimpleAttentionNetwork, TransformerConfig, make_causal_mask, make_padding_mask
 
 
 def normalize_tools(tools_json):
@@ -66,6 +73,8 @@ def _get_decode_fn(model, max_gen_len):
     params is an explicit argument (not closed over) so the same compiled
     function can be reused across calls with different params.
     """
+    jax, _ = _jax()
+    _, _, make_causal_mask, _ = _arch()
     key = (id(model), max_gen_len)
     if key not in _decode_fn_cache:
         tgt_mask = make_causal_mask(max_gen_len)
@@ -82,6 +91,8 @@ def _get_decode_fn(model, max_gen_len):
 
 
 def load_checkpoint(path):
+    jax, jnp = _jax()
+    _, TransformerConfig, _, _ = _arch()
     with open(path, "rb") as f:
         data = pickle.load(f)
     params = jax.tree.map(lambda x: jnp.array(x, dtype=jnp.bfloat16), data["params"])
@@ -109,6 +120,9 @@ def generate(model, params, tokenizer, query, tools="[]", max_gen_len=DEFAULT_MA
     Encoder: [query_tokens..., <tools>, tools_tokens...] truncated to max_enc_len.
     Decoder: prefilled with [EOS], model predicts <tool_call> first, then answer tokens.
     """
+    _, jnp = _jax()
+    _, _, _, make_padding_mask = _arch()
+
     name_map = {}
     if normalize:
         tools, name_map = normalize_tools(tools)
@@ -137,7 +151,7 @@ def generate(model, params, tokenizer, query, tools="[]", max_gen_len=DEFAULT_MA
         constrained_decoder = build_constrained_decoder([tools], tokenizer)
 
     if stream:
-        sys.stdout.write(f"\n")
+        sys.stdout.write("\n")
         sys.stdout.flush()
 
     logits = decode_fn(params, dec_buffer, encoder_out, enc_mask)
@@ -187,6 +201,9 @@ def generate_batch(model, params, tokenizer, queries, tools_list, max_gen_len=DE
 
     Returns a list of decoded strings, one per example.
     """
+    _, jnp = _jax()
+    _, _, _, make_padding_mask = _arch()
+
     name_maps = []
     if normalize:
         normed_tools = []
@@ -291,6 +308,7 @@ def main(args):
 
 def encode_for_retrieval(model, params, tokenizer, texts, max_len=256, batch_size=64):
     """Encode texts into contrastive embeddings for retrieval. Returns (N, contrastive_dim) numpy array."""
+    _, jnp = _jax()
     pad_id = tokenizer.pad_token_id
     all_embs = []
 

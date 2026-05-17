@@ -7,10 +7,10 @@ dependencies = [
     "transformers",
     "sentencepiece",
     "tqdm",
-    "mlx-vlm>=0.5",
 ]
 
 [project.optional-dependencies]
+mlx = ["mlx-vlm>=0.5"]
 train = [
     "jax",
     "jaxlib",

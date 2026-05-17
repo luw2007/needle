@@ -4,16 +4,22 @@ import json
 import re
 import sys
 
-DEFAULT_MODEL = "mlx-community/gemma-4-e4b-it-4bit"
+from .registry import resolve_model
 
 _cache = {}
 
 
 def load_model(model_id=None):
-    model_id = model_id or DEFAULT_MODEL
+    model_id = resolve_model(model_id)
     if model_id in _cache:
         return _cache[model_id]
-    from mlx_vlm import load
+    try:
+        from mlx_vlm import load
+    except ImportError:
+        raise ImportError(
+            "mlx-vlm is required for Gemma inference but not installed.\n"
+            "Install it with: pip install 'needle[mlx]'"
+        ) from None
 
     print(f"Loading model: {model_id}", file=sys.stderr)
     model, processor = load(model_id)
@@ -81,7 +87,13 @@ def parse_tool_calls(text):
 
 
 def generate(query, tools="[]", model_id=None, max_tokens=512, stream=True):
-    from mlx_vlm import generate as mlx_generate
+    try:
+        from mlx_vlm import generate as mlx_generate
+    except ImportError:
+        raise ImportError(
+            "mlx-vlm is required for Gemma inference but not installed.\n"
+            "Install it with: pip install 'needle[mlx]'"
+        ) from None
 
     model, processor = load_model(model_id)
     prompt = build_prompt(processor, query, tools)
