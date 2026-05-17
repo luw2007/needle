@@ -60,12 +60,28 @@ def fuse_and_export(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    mlx_lm.fuse(
-        model=base_model_id,
-        adapter_file=os.path.join(adapter_path, "adapters.safetensors"),
-        save_path=output_dir,
-        de_quantize=de_quantize,
+    from mlx_lm import load as mlx_load
+    from mlx_lm.fuse import save, dequantize_model
+    from mlx.utils import tree_unflatten
+
+    model, tokenizer, config = mlx_load(
+        base_model_id, adapter_path=adapter_path, return_config=True
     )
+
+    fused_linears = [
+        (n, m.fuse(dequantize=de_quantize))
+        for n, m in model.named_modules()
+        if hasattr(m, "fuse")
+    ]
+    if fused_linears:
+        model.update_modules(tree_unflatten(fused_linears))
+
+    if de_quantize:
+        model = dequantize_model(model)
+        config.pop("quantization", None)
+        config.pop("quantization_config", None)
+
+    save(Path(output_dir), base_model_id, model, tokenizer, config, donate_model=False)
 
     print(f"Fused model saved to: {output_dir}")
     return output_dir
