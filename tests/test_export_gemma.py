@@ -53,12 +53,18 @@ class TestRequireMlxLm(unittest.TestCase):
 
 
 class TestFuseAndExport(unittest.TestCase):
+    @patch("mlx.utils.tree_unflatten", return_value=[])
+    @patch("mlx_lm.fuse.save")
+    @patch("mlx_lm.load")
     @patch("needle.finetune.export._require_mlx_lm")
-    def test_fuse_called_with_correct_args(self, mock_require):
+    def test_fuse_called_with_correct_args(self, mock_require, mock_load, mock_save, mock_unflatten):
         from needle.finetune.export import fuse_and_export
 
-        mock_mlx_lm = MagicMock()
-        mock_require.return_value = mock_mlx_lm
+        mock_model = MagicMock()
+        mock_model.named_modules.return_value = []
+        mock_tokenizer = MagicMock()
+        mock_config = {}
+        mock_load.return_value = (mock_model, mock_tokenizer, mock_config)
 
         with tempfile.TemporaryDirectory() as tmp:
             adapter_path = os.path.join(tmp, "adapters")
@@ -76,12 +82,12 @@ class TestFuseAndExport(unittest.TestCase):
             resolved_adapter = str(Path(adapter_path).resolve())
             resolved_output = str(Path(output_dir).resolve())
             self.assertEqual(result, resolved_output)
-            mock_mlx_lm.fuse.assert_called_once_with(
-                model="mlx-community/gemma-3-4b-it-4bit",
-                adapter_file=os.path.join(resolved_adapter, "adapters.safetensors"),
-                save_path=resolved_output,
-                de_quantize=False,
+            mock_load.assert_called_once_with(
+                "mlx-community/gemma-3-4b-it-4bit",
+                adapter_path=resolved_adapter,
+                return_config=True,
             )
+            mock_save.assert_called_once()
 
     def test_missing_adapter_path_raises(self):
         from needle.finetune.export import fuse_and_export
