@@ -92,3 +92,8 @@ tokenizer/
 data/
 voice_samples/
 needle-ui.*
+adapters*/
+fused_model/
+configs/
+.omc/
+BRIEF.md
