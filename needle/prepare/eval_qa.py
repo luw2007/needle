@@ -27,19 +27,6 @@ class EvalReport:
     results: list[EvalResult] = field(default_factory=list)
 
 
-JUDGE_PROMPT = """你是一个评判助手。比较"预期答案"和"模型答案"，判断模型是否正确回答了问题。
-
-问题：{question}
-预期答案：{expected}
-模型答案：{predicted}
-
-评分标准：
-- "correct": 模型答案包含预期答案的核心信息点，即使措辞不同、顺序不同、或包含额外正确信息
-- "partial": 模型答案提到了主题但遗漏了多个关键信息点
-- "wrong": 模型答案与预期答案的核心信息完全不符或答非所问
-
-仅输出一个词：correct 或 partial 或 wrong"""
-
 
 def evaluate_qa(
     eval_jsonl: str | Path,
@@ -58,11 +45,19 @@ def evaluate_qa(
 
     answer_model, answer_tokenizer = _load_eval_model(model_id, adapter_path)
 
+    judge_model, judge_processor = None, None
+    try:
+        from ..model.gemma import load_model as load_vlm_model
+        judge_model, judge_processor = load_vlm_model()
+        print("  Judge: Gemma model (mlx_vlm)", file=sys.stderr)
+    except Exception:
+        print("  Judge: fallback (ROUGE-L + entity)", file=sys.stderr)
+
     report = EvalReport(total=len(records))
 
     for i, (question, expected, system_ctx) in enumerate(records):
         predicted = _generate_answer(answer_model, answer_tokenizer, question, max_tokens, system_ctx)
-        judgment, score = _keyword_judge(expected, predicted)
+        judgment, score = _keyword_judge(expected, predicted, judge_model, judge_processor)
 
         if judgment == "correct":
             report.correct += 1
@@ -77,75 +72,66 @@ def evaluate_qa(
         ))
 
         if (i + 1) % 10 == 0 or i == len(records) - 1:
-            acc = (report.correct + 0.5 * report.partial) / (i + 1)
-            print(f"  [{i + 1}/{len(records)}] running accuracy: {acc:.1%}", file=sys.stderr)
+            avg = sum(r.score for r in report.results) / (i + 1)
+            print(f"  [{i + 1}/{len(records)}] avg score: {avg:.1f}, min: {min(r.score for r in report.results):.1f}", file=sys.stderr)
 
-    report.accuracy = (report.correct + 0.5 * report.partial) / report.total if report.total else 0.0
+    all_scores = [r.score for r in report.results]
+    report.accuracy = sum(all_scores) / len(all_scores) if all_scores else 0.0
     return report
 
 
-def _keyword_judge(expected: str, predicted: str) -> tuple[str, float]:
-    """Judge answer quality by combining ROUGE-L F1, entity overlap, negation check, and list coverage."""
+def _keyword_judge(expected: str, predicted: str, judge_model=None, judge_processor=None) -> tuple[str, float]:
+    """Judge answer quality using Gemma model as scorer (0-100)."""
+    if judge_model is not None and judge_processor is not None:
+        score = _model_score(expected, predicted, judge_model, judge_processor)
+    else:
+        score = _fallback_score(expected, predicted)
+
+    if score >= 70:
+        return "correct", score
+    elif score >= 40:
+        return "partial", score
+    else:
+        return "wrong", score
+
+
+def _model_score(expected: str, predicted: str, model, processor) -> float:
+    """Use Gemma model to score answer correctness 0-100."""
+    import re
+    try:
+        from mlx_vlm import generate as mlx_generate
+    except ImportError:
+        return _fallback_score(expected, predicted)
+
+    prompt_text = (
+        f"判断「模型答案」是否正确回答了问题。标准答案提供参考。\n"
+        f"标准答案：{expected}\n模型答案：{predicted}\n"
+        f"评分：100=完全正确，75=基本正确但有遗漏，50=部分正确，25=大部分错误，0=完全错误。\n"
+        f"只回复一个整数。"
+    )
+    msgs = [{"role": "user", "content": prompt_text}]
+    p = processor.tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+    out = mlx_generate(model, processor, p, max_tokens=16, verbose=False)
+    text = out.text if hasattr(out, "text") else str(out)
+
+    m = re.search(r'\d+', text.strip())
+    if m:
+        val = int(m.group())
+        return min(val, 100)
+    return _fallback_score(expected, predicted)
+
+
+def _fallback_score(expected: str, predicted: str) -> float:
+    """Fallback: ROUGE-L + entity overlap when model judge unavailable."""
     expected_clean = _normalize_text(expected)
     predicted_clean = _normalize_text(predicted)
-
     if not expected_clean:
-        return ("correct", 1.0) if len(predicted_clean) > 5 else ("wrong", 0.0)
+        return 100.0 if len(predicted_clean) > 5 else 0.0
 
     lcs_len = _lcs_length(expected_clean, predicted_clean)
-    precision = lcs_len / len(predicted_clean) if predicted_clean else 0.0
     recall = lcs_len / len(expected_clean) if expected_clean else 0.0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-
     entity_score = _entity_overlap(expected, predicted)
-
-    if _negation_mismatch(expected, predicted):
-        entity_score *= 0.5
-        f1 *= 0.5
-
-    combined = 0.6 * f1 + 0.4 * entity_score
-
-    list_cov = _list_coverage(expected, predicted)
-    if list_cov is not None and list_cov < 0.5:
-        return ("partial" if combined >= 0.10 else "wrong"), combined * 0.5
-
-    if combined >= 0.20:
-        return "correct", combined
-    elif combined >= 0.08:
-        return "partial", combined
-    else:
-        return "wrong", combined
-
-
-_NEGATION_MARKERS = {"不", "没", "无", "非", "否", "未", "别", "勿", "没有", "无法", "并非", "不是", "不能", "不会"}
-
-
-def _negation_mismatch(expected: str, predicted: str) -> bool:
-    """Detect if expected and predicted have different negation polarity."""
-    exp_neg = any(m in expected for m in _NEGATION_MARKERS)
-    pred_neg = any(m in predicted for m in _NEGATION_MARKERS)
-    return exp_neg != pred_neg
-
-
-def _list_coverage(expected: str, predicted: str) -> float | None:
-    """Check coverage of enumerated items in expected answer. Returns None if not a list."""
-    import re
-    items = re.split(r'[、，,;；]\s*', expected)
-    items = [it.strip() for it in items if len(it.strip()) >= 4]
-    if len(items) < 3:
-        backtick_items = re.findall(r'`([^`]+)`', expected)
-        bracket_items = re.findall(r'\[\[([^\]]+)\]\]', expected)
-        items = backtick_items + bracket_items
-    if len(items) < 3:
-        return None
-
-    predicted_lower = predicted.lower()
-    hits = 0
-    for item in items:
-        item_clean = item.strip('`[]').lower()
-        if len(item_clean) >= 2 and item_clean in predicted_lower:
-            hits += 1
-    return hits / len(items) if items else None
+    return (0.6 * recall + 0.4 * entity_score) * 100
 
 
 def _entity_overlap(expected: str, predicted: str) -> float:
@@ -176,7 +162,7 @@ def _normalize_text(text: str) -> str:
     """Remove whitespace and common punctuation for comparison."""
     import re
     text = re.sub(r'[\s　]+', '', text)
-    text = re.sub(r'[，。、；：！？""''【】（）《》\-—…·`\'\",.;:!?\[\](){}<>/\\|]', '', text)
+    text = re.sub(r'[，。、；：！？“”‘’【】（）《》\-—…·`\'\",.;:!?\[\](){}<>/\\|]', '', text)
     return text.lower()
 
 
@@ -207,9 +193,6 @@ def _lcs_length_approx(a: str, b: str) -> int:
     a_in = sum(1 for c in a if c in overlap)
     b_in = sum(1 for c in b if c in overlap)
     return min(a_in, b_in)
-
-    report.accuracy = (report.correct + 0.5 * report.partial) / report.total if report.total else 0.0
-    return report
 
 
 def _load_eval_records(path: Path) -> list[tuple[str, str, str]]:
@@ -271,25 +254,6 @@ def _generate_answer(model, tokenizer, question: str, max_tokens: int, system_ct
     return mlx_gen(model, tokenizer, prompt=prompt, max_tokens=max_tokens, verbose=False)
 
 
-def _judge_answer(model, tokenizer, question: str, expected: str, predicted: str) -> str:
-    from mlx_lm import generate as mlx_gen
-
-    prompt_text = JUDGE_PROMPT.format(
-        question=question, expected=expected, predicted=predicted
-    )
-    messages = [{"role": "user", "content": prompt_text}]
-    prompt = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
-    output = mlx_gen(model, tokenizer, prompt=prompt, max_tokens=32, verbose=False)
-    output = output.strip().lower()
-
-    for label in ("correct", "partial", "wrong"):
-        if label in output:
-            return label
-    return "wrong"
-
-
 def main(args) -> None:
     report = evaluate_qa(
         eval_jsonl=args.eval_jsonl,
@@ -307,7 +271,11 @@ def main(args) -> None:
     print(f"  Correct:  {report.correct}")
     print(f"  Partial:  {report.partial}")
     print(f"  Wrong:    {report.wrong}")
-    print(f"  Accuracy: {report.accuracy:.1%}")
+    print(f"  Avg Score: {report.accuracy:.1f}/100")
+    all_scores = [r.score for r in report.results]
+    if all_scores:
+        print(f"  Min Score: {min(all_scores):.1f}")
+        print(f"  >= 70:     {sum(1 for s in all_scores if s >= 70)}/{len(all_scores)}")
     print(f"{'=' * 50}")
 
     if report.wrong > 0:
