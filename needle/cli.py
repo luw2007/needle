@@ -242,6 +242,43 @@ def main():
     p.add_argument("--max-enc-len", type=int, default=None)
     p.add_argument("--max-dec-len", type=int, default=None)
 
+    p = sub.add_parser("finetune-gemma", add_help=False)
+    p.add_argument("-c", "--config", type=str, default=None,
+                   help="YAML config file for fine-tuning")
+    p.add_argument("--model", type=str, default=None,
+                   help="HF model name (default: google/gemma-3-4b-it)")
+    p.add_argument("--data", type=str, default=None,
+                   help="Path to JSONL data dir or HF dataset name")
+    p.add_argument("--fine-tune-type", type=str, default=None,
+                   choices=["lora", "dora", "full"])
+    p.add_argument("--optimizer", type=str, default=None,
+                   choices=["adam", "adamw", "muon", "sgd", "adafactor"])
+    p.add_argument("--learning-rate", type=float, default=None)
+    p.add_argument("--batch-size", type=int, default=None)
+    p.add_argument("--iters", type=int, default=None)
+    p.add_argument("--max-seq-length", type=int, default=None)
+    p.add_argument("--adapter-path", type=str, default=None)
+    p.add_argument("--lora-rank", type=int, default=None)
+    p.add_argument("--lora-layers", type=int, default=None)
+    p.add_argument("--grad-checkpoint", action="store_true", default=None)
+    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--mask-prompt", action="store_true", default=None)
+    p.add_argument("--dry-run", action="store_true", default=False,
+                   help="Validate config and print training plan without starting training")
+
+    p = sub.add_parser("export-gemma", add_help=False)
+    p.add_argument("adapter_path", type=str, help="Path to LoRA adapter directory")
+    p.add_argument("--base-model", type=str, default="mlx-community/gemma-3-4b-it-4bit",
+                   help="Base model HF repo ID (default: mlx-community/gemma-3-4b-it-4bit)")
+    p.add_argument("--output-dir", type=str, default=None,
+                   help="Output directory for fused model (default: <adapter_path>/fused_model)")
+    p.add_argument("--repo-id", type=str, default=None,
+                   help="HuggingFace repo ID to push to (e.g. user/my-model)")
+    p.add_argument("--private", action="store_true", help="Create private HF repo")
+    p.add_argument("--dry-run", action="store_true", help="Print export plan without executing")
+    p.add_argument("--de-quantize", action="store_true",
+                   help="De-quantize weights during fusion")
+
     p = sub.add_parser("playground", add_help=False)
     p.add_argument("--model", type=str, default=None,
                    help="Model profile alias or HF repo (default: gemma-4-e4b-it-4bit). "
@@ -353,6 +390,26 @@ def main():
     elif args.command == "finetune":
         from .training.finetune import finetune_local
         finetune_local(args)
+    elif args.command == "finetune-gemma":
+        from .finetune.config import load_config
+        from .finetune.lora import run_finetune
+        overrides = {}
+        for k in ("model", "data", "fine_tune_type", "optimizer",
+                  "learning_rate", "batch_size", "iters", "max_seq_length",
+                  "adapter_path", "seed", "mask_prompt", "grad_checkpoint"):
+            v = getattr(args, k.replace("-", "_"), None)
+            if v is not None:
+                overrides[k] = v
+        if getattr(args, "lora_rank", None) is not None:
+            overrides.setdefault("lora", {})["rank"] = args.lora_rank
+        if getattr(args, "lora_layers", None) is not None:
+            overrides.setdefault("lora", {})["num_layers"] = args.lora_layers
+        cfg = load_config(getattr(args, "config", None), overrides)
+        cfg.dry_run = getattr(args, "dry_run", False)
+        run_finetune(cfg)
+    elif args.command == "export-gemma":
+        from .finetune.export import main as export_main
+        export_main(args)
     elif args.command == "playground":
         if getattr(args, "model", None) == "help":
             from .model.registry import list_profiles

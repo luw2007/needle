@@ -1,0 +1,6 @@
+{"messages": [{"role": "user", "content": "hello"}]}
+not valid json at all
+{"messages": [{"role": "invalid_role", "content": "test"}]}
+{"messages": [{"role": "assistant"}]}
+{"messages": []}
+{"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "tool_calls": [{"bad": true}], "content": ""}]}
