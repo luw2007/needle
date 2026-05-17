@@ -266,16 +266,10 @@ def generate_batch(model, params, tokenizer, queries, tools_list, max_gen_len=DE
 
 
 def main(args):
-    print(f"Loading checkpoint: {args.checkpoint}")
-    params, config = load_checkpoint(args.checkpoint)
+    from .gemma import generate, load_model
 
-    model = SimpleAttentionNetwork(config)
-    tokenizer = get_tokenizer()
-
-    param_count = sum(x.size for x in jax.tree.leaves(params))
-    print(f"Model parameters: {param_count:,}")
-
-    use_constrained = not getattr(args, "no_constrained", False)
+    model_id = getattr(args, "model", None)
+    load_model(model_id)
 
     query = getattr(args, "query", None)
     tools = getattr(args, "tools", None) or "[]"
@@ -289,20 +283,10 @@ def main(args):
             ('Get the current stock price of AAPL', '[{"name": "get_stock_price", "description": "Get the current stock price.", "parameters": {"symbol": {"type": "string", "description": "Ticker symbol.", "required": true}}}]'),
         ]
 
-    for i, (q, t) in enumerate(queries):
+    for q, t in queries:
         print(f"\nQuery: {q}")
         print(f"Tools: {t[:80]}{'...' if len(t) > 80 else ''}")
-        generate(
-            model,
-            params,
-            tokenizer,
-            q,
-            tools=t,
-            max_gen_len=args.max_len,
-            seed=args.seed + i,
-            stream=True,
-            constrained=use_constrained,
-        )
+        generate(q, tools=t, model_id=model_id, max_tokens=args.max_len, stream=True)
 
 
 def encode_for_retrieval(model, params, tokenizer, texts, max_len=256, batch_size=64):

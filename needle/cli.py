@@ -191,13 +191,10 @@ def main():
                    help="Max token length for individual tool descriptions (default: 256)")
 
     p = sub.add_parser("run", add_help=False)
-    p.add_argument("--checkpoint", type=str, required=True)
+    p.add_argument("--model", type=str, default=None, help="MLX model ID (default: gemma-4-e4b-it-4bit)")
     p.add_argument("--query", type=str, default=None, help="Query text for tool-call generation")
     p.add_argument("--tools", type=str, default=None, help="Tools JSON for tool-call generation")
     p.add_argument("--max-len", type=int, default=512)
-    p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--no-constrained", action="store_true",
-                   help="Disable grammar-constrained decoding for tool names/arg keys")
 
     p = sub.add_parser("eval", add_help=False)
     p.add_argument("--checkpoint", type=str, required=True)
@@ -239,7 +236,7 @@ def main():
     p.add_argument("--max-dec-len", type=int, default=None)
 
     p = sub.add_parser("playground", add_help=False)
-    p.add_argument("--checkpoint", type=str, default=None)
+    p.add_argument("--model", type=str, default=None, help="MLX model ID (default: gemma-4-e4b-it-4bit)")
     p.add_argument("--port", type=int, default=7860)
     p.add_argument("--host", type=str, default="127.0.0.1")
 

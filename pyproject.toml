@@ -3,22 +3,25 @@ name = "needle"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
+    "huggingface_hub",
+    "transformers",
+    "sentencepiece",
+    "tqdm",
+    "mlx-vlm>=0.5",
+]
+
+[project.optional-dependencies]
+train = [
     "jax",
     "jaxlib",
     "flax",
     "optax",
     "datasets",
-    "huggingface_hub",
-    "transformers",
     "wandb",
-    "sentencepiece",
     "scipy",
     "gcsfs",
-    "tqdm",
     "google-genai",
 ]
-
-[project.optional-dependencies]
 tpu = ["jax[tpu]"]
 gpu = ["jax[cuda12]"]
 

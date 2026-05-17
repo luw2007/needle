@@ -25,11 +25,8 @@ _MAX_JSON_BYTES = 1024 * 1024
 _MAX_UPLOAD_BYTES = 512 * 1024 * 1024
 _SOCKET_TIMEOUT = 30
 
-_model = None
-_params = None
-_tokenizer = None
+_model_ready = False
 _current_model = ""
-_current_model_path = None
 _lock = threading.Lock()
 _finetune_lock = threading.Lock()
 _finetune_status = {
@@ -393,7 +390,7 @@ class _Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._json_response(400, {"error": str(exc)})
             return
-        if not _current_model_path:
+        if not _model_ready:
             self._json_response(400, {"error": "Load a model before finetuning"})
             return
         if not _start_finetune(tools, api_key):
@@ -402,21 +399,7 @@ class _Handler(BaseHTTPRequestHandler):
         self._json_response(200, {"status": "started"})
 
     def _handle_load_model(self):
-        if not _is_local_request(self.client_address[0]):
-            self._json_response(403, {"error": "model upload is only allowed from localhost"})
-            return
-        upload_dir = _checkpoints_dir() / "_uploaded"
-        try:
-            filename, target = _stream_upload_to_file(self, _MAX_UPLOAD_BYTES, upload_dir)
-        except ValueError as exc:
-            self._json_response(400, {"error": str(exc)})
-            return
-        try:
-            _load_checkpoint(str(target), display_name=filename)
-            self._json_response(200, {"name": filename})
-        except Exception as exc:
-            target.unlink(missing_ok=True)
-            self._json_response(500, {"error": "Failed to load checkpoint"})
+        self._json_response(410, {"error": "Model upload no longer supported. Use --model flag at startup."})
 
     def _json_response(self, code, data):
         payload = _json.dumps(data).encode()
@@ -431,22 +414,16 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def _run_generate(query, tools, seed, max_gen_len, constrained):
-    from ..model.run import generate
+    from ..model.gemma import generate_no_stream
 
     with _lock:
-        if _model is None or _params is None or _tokenizer is None:
+        if not _model_ready:
             return None, "model is not loaded"
         try:
-            result = generate(
-                _model,
-                _params,
-                _tokenizer,
+            result = generate_no_stream(
                 query,
                 tools=tools,
-                max_gen_len=max_gen_len,
-                seed=seed,
-                stream=False,
-                constrained=constrained,
+                max_tokens=max_gen_len,
             )
             return result, None
         except Exception as exc:
@@ -455,18 +432,7 @@ def _run_generate(query, tools, seed, max_gen_len, constrained):
 
 
 def _load_checkpoint(path, display_name=None):
-    global _model, _params, _tokenizer, _current_model, _current_model_path
-    from ..dataset.dataset import get_tokenizer
-    from ..model.architecture import SimpleAttentionNetwork
-    from ..model.run import load_checkpoint
-
-    with _lock:
-        _params, config = load_checkpoint(path)
-        _model = SimpleAttentionNetwork(config)
-        _tokenizer = get_tokenizer()
-        _current_model = display_name or Path(path).name
-        _current_model_path = path
-        print(f"Loaded: {_current_model}", file=sys.stderr)
+    pass
 
 
 def _validate_training_data(data_file_path):
@@ -572,9 +538,6 @@ def _start_finetune(tools_json, api_key):
             existing_pkls = set()
             if ckpt_dir.exists():
                 existing_pkls = set(p.name for p in ckpt_dir.glob("*.pkl"))
-            if _current_model_path:
-                checkpoint_arg = ["--checkpoint", _current_model_path]
-                ckpt_name = Path(_current_model_path).name
             batch_size = min(32, generated)
             _append_finetune_log(
                 f"Training {_EPOCHS} epochs, batch_size={batch_size}, "
@@ -757,21 +720,13 @@ def _resolve_checkpoint(checkpoint_arg):
 
 
 def main(args):
-    global _model, _params, _tokenizer, _current_model, _current_model_path
-    from ..dataset.dataset import get_tokenizer
-    from ..model.architecture import SimpleAttentionNetwork
-    from ..model.run import load_checkpoint
+    global _model_ready, _current_model
+    from ..model.gemma import load_model
 
-    checkpoint_path = _resolve_checkpoint(args.checkpoint)
-    print(f"Loading checkpoint: {checkpoint_path}", file=sys.stderr)
-    _params, config = load_checkpoint(checkpoint_path)
-    _model = SimpleAttentionNetwork(config)
-    _tokenizer = get_tokenizer()
-    _current_model = Path(checkpoint_path).name
-    _current_model_path = checkpoint_path
-
-    param_count = sum(x.size for x in __import__("jax").tree.leaves(_params))
-    print(f"Model parameters: {param_count:,}", file=sys.stderr)
+    model_id = getattr(args, "model", None)
+    load_model(model_id)
+    _model_ready = True
+    _current_model = model_id or "gemma-4-e4b-it-4bit"
 
     server = ThreadingHTTPServer((args.host, args.port), _Handler)
     server.timeout = _SOCKET_TIMEOUT
